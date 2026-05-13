@@ -522,6 +522,10 @@
                   "name": "Los Angeles (洛杉矶)"
                 },
                 {
+                  "id": "Ontario",
+                  "name": "Ontario (安大略)"
+                },
+                {
                   "id": "San_Jose",
                   "name": "San Jose (圣何塞)"
                 }
