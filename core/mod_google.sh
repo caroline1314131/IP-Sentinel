@@ -86,12 +86,35 @@ fi
 SESSION_BASE_LAT=$(get_random_coord $BASE_LAT 270)
 SESSION_BASE_LON=$(get_random_coord $BASE_LON 270)
 
-# [行为学控制] 随机指派本次会话的动作深度
+# 【核心升级】随机决定本次上网深度 (5 - 8 个复合动作，配合高频长效拉伸)
 TOTAL_ACTIONS=$((5 + RANDOM % 4))
 
 log "$MODULE_NAME" "INFO " "当前出网 IP: $CURRENT_IP"
 log "$MODULE_NAME" "INFO " "设备指纹锁定: ${SESSION_UA:0:45}..."
 log "$MODULE_NAME" "INFO " "虚拟驻留坐标: $SESSION_BASE_LAT, $SESSION_BASE_LON"
+
+# -----------------------------------------------------------
+# [v4.1.2] Cookie 持久化身份库 (Google 专属物理隔离)
+# 构建真实的 Session 连续性，打破“每分钟失忆”的机器人特征
+# -----------------------------------------------------------
+COOKIE_DIR="${INSTALL_DIR}/data/cookies"
+mkdir -p "$COOKIE_DIR"
+
+NODE_HASH=$(echo -n "$CURRENT_IP" | cksum | awk '{print $1}')
+COOKIE_FILE="${COOKIE_DIR}/google_${NODE_HASH}.txt"
+
+# [互斥锁] 防止会话重叠导致的 Cookie 文件读写冲突
+LOCK_FILE="${COOKIE_FILE}.lock"
+exec 200>"$LOCK_FILE"
+flock -n 200 || {
+    log "$MODULE_NAME" "WARN " "检测到已有 Google 会话运行，跳过本轮。"
+    exit 0
+}
+
+# [v4.1.2 磁盘防御] 定期清理超过 14 天的废弃 Cookie，防止长期挂机导致 I/O 拥堵
+find "$COOKIE_DIR" -type f -name "google_*.txt" -mtime +14 -delete 2>/dev/null || true
+
+log "$MODULE_NAME" "INFO " "Cookie 身份库已挂载: ${COOKIE_FILE}"
 
 # -----------------------------------------------------------
 # [网络栈探底] 协议自适应与出站死锁
@@ -130,21 +153,26 @@ for ((i=1; i<=TOTAL_ACTIONS; i++)); do
     ACTION_TYPE=$((1 + RANDOM % 4))
     
     # [协议挂载] 注入双栈与网卡死锁参数
+    # [v4.1.2] 挂载持久化 Cookie (-b -c)，确立连续会话画像
     case $ACTION_TYPE in
         1) # 搜索引擎交互
-            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -L -o /dev/null -w "%{http_code}" -A "$SESSION_UA" \
+            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -L -o /dev/null -w "%{http_code}" \
+                 -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" \
                  "https://www.google.com/search?q=${ENCODED_KEY}&${LANG_PARAMS}")
             ;;
         2) # 区域新闻阅读
-            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -L -o /dev/null -w "%{http_code}" -A "$SESSION_UA" \
+            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -L -o /dev/null -w "%{http_code}" \
+                 -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" \
                  "https://news.google.com/home?${LANG_PARAMS}")
             ;;
         3) # 坐标系 LBS 查询
-            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -o /dev/null -w "%{http_code}" -A "$SESSION_UA" \
+            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 15 -s -o /dev/null -w "%{http_code}" \
+                 -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" \
                  "https://www.google.com/maps/search/$${ENCODED_KEY}/@${ACTION_LAT},${ACTION_LON},17z?${LANG_PARAMS}")
             ;;
         4) # 底层系统级网络探测连通性握手
-            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -o /dev/null -w "%{http_code}" -A "$SESSION_UA" \
+            CODE=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -o /dev/null -w "%{http_code}" \
+                 -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" \
                  "https://connectivitycheck.gstatic.com/generate_204")
             ;;
     esac
@@ -164,8 +192,9 @@ done
 # -----------------------------------------------------------
 log "$MODULE_NAME" "INFO " "启动三核交叉验证 (URL跳转 + YT Premium + YT Music) 穿透获取 GeoIP..."
 
-# 探针 1: URL 区域重定向嗅探
-JUMP_HDR=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -sI "http://www.google.com/")
+# 核心 1: 传统 URL 跳转探测 (请求 www 才能触发准确跳转)
+# [v4.1.2] 追加持久化 Cookie
+JUMP_HDR=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -sI -b "$COOKIE_FILE" -c "$COOKIE_FILE" "http://www.google.com/")
 JUMP_LOC=$(echo "$JUMP_HDR" | grep -i "^location:" | tr -d '\r\n')
 JUMP_GL=""
 
@@ -207,9 +236,11 @@ else
     esac
 fi
 
-# 探针 2: YouTube Premium 区域锁嗅探
+# 核心 2: YouTube Premium 区域锁嗅探
 YT_PR_GL=""
-YT_PR_HTML=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -L -A "$SESSION_UA" "https://www.youtube.com/premium")
+# [修复] 必须带上本轮循环的专属 UA (-A "$SESSION_UA")，防止被 Google CDN 丢进无状态爬虫兜底页
+# [v4.1.2] 追加持久化 Cookie
+YT_PR_HTML=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" "https://www.youtube.com/premium")
 if [[ "$YT_PR_HTML" == *"www.google.cn"* ]]; then
     YT_PR_GL="CN"
 else
@@ -218,9 +249,11 @@ else
     [ -z "$YT_PR_GL" ] && YT_PR_GL=$(echo "$YT_PR_HTML" | grep -o '"INNERTUBE_CONTEXT_GL":"[A-Za-z]\{2\}"' | head -n 1 | cut -d'"' -f4 | tr 'a-z' 'A-Z')
 fi
 
-# 探针 3: YouTube Music 区域锁嗅探
+# 核心 3: YouTube Music 区域锁嗅探
 YT_MU_GL=""
-YT_MU_HTML=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -L -A "$SESSION_UA" "https://music.youtube.com/")
+# [修复] 同样加持 UA 装甲，强行唤出完整版前端框架
+# [v4.1.2] 追加持久化 Cookie
+YT_MU_HTML=$(curl $CURL_BIND_OPT $DYNAMIC_IP_PREF -m 10 -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" -A "$SESSION_UA" "https://music.youtube.com/")
 if [[ "$YT_MU_HTML" == *"www.google.cn"* ]]; then
     YT_MU_GL="CN"
 else
