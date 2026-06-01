@@ -658,14 +658,16 @@ if [ "$UPGRADE_MODE" == "true" ]; then
     RAW_BASE_IP=$(echo "$SAFE_PUBLIC_IP" | tr -d '[]')
     
     # 追加 V4 容灾备弹
-    if [[ -n "$RAW_V4" ]] && [[ "$RAW_V4" != "$RAW_BASE_IP" ]]; then
+    if [[ -n "$RAW_V4" ]] && [[ "$NEW_COMM_IP" != *"$RAW_V4"* ]]; then
         NEW_COMM_IP="${NEW_COMM_IP},${RAW_V4}"
     fi
     
     # 追加 V6 容灾备弹
-    if [[ -n "$RAW_V6" ]] && [[ "$RAW_V6" != "$RAW_BASE_IP" ]]; then
+    if [[ -n "$RAW_V6" ]]; then
         [[ "$RAW_V6" != *"["* ]] && SAFE_V6="[${RAW_V6}]" || SAFE_V6="$RAW_V6"
-        NEW_COMM_IP="${NEW_COMM_IP},${SAFE_V6}"
+        if [[ "$NEW_COMM_IP" != *"$SAFE_V6"* ]]; then
+            NEW_COMM_IP="${NEW_COMM_IP},${SAFE_V6}"
+        fi
     fi
     
     # 强制覆盖 config.conf 中的旧 COMM_IP 记录
