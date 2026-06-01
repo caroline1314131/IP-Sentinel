@@ -1023,13 +1023,22 @@ if [[ -n "$TG_TOKEN" ]]; then
     echo "📡 Webhook 监听已启动 (端口: $AGENT_PORT) 并向中枢发送了注册请求。"
     
     FW_MSG=""
+    # [v4.2.1 防火墙修正] 严格依据通讯面专线 (COMM_IP) 协议栈生成放行指令
+    IS_V6_COMM="false"
+    [[ "$SAFE_COMM_IP" == *":"* ]] && IS_V6_COMM="true"
+
     if command -v ufw >/dev/null 2>&1 && ufw status | grep -qw active; then
+        # UFW 默认同时添加双栈规则，无需特地区分，但注释中可指明
         FW_MSG="ufw allow $AGENT_PORT/tcp"
     elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld | grep -qw active; then
         FW_MSG="firewall-cmd --zone=public --add-port=$AGENT_PORT/tcp --permanent && firewall-cmd --reload"
     elif command -v iptables >/dev/null 2>&1; then
-        if [[ "$SAFE_PUBLIC_IP" == *":"* ]]; then
-            FW_MSG="ip6tables -I INPUT -p tcp --dport $AGENT_PORT -j ACCEPT"
+        if [ "$IS_V6_COMM" == "true" ]; then
+            if command -v ip6tables >/dev/null 2>&1; then
+                FW_MSG="ip6tables -I INPUT -p tcp --dport $AGENT_PORT -j ACCEPT"
+            else
+                FW_MSG="iptables -I INPUT -p tcp --dport $AGENT_PORT -j ACCEPT  # 提示: 系统缺失 ip6tables 命令"
+            fi
         else
             FW_MSG="iptables -I INPUT -p tcp --dport $AGENT_PORT -j ACCEPT"
         fi
