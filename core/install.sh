@@ -637,40 +637,43 @@ if [ "$UPGRADE_MODE" == "true" ]; then
         SAFE_PUBLIC_IP="${PUBLIC_IP}"
     fi
 
-    # [v4.2.2 热修复] 为老版本平滑补齐多宿主容灾通讯 IP
-    if ! grep -q "^COMM_IP=" "$CONFIG_FILE"; then
-        echo -e "\n🔄 [平滑迁移] 正在为老节点无损注入 v4.2.2 容灾通讯架构..."
-        TMP_PUB_IP=$(grep "^PUBLIC_IP=" "$CONFIG_FILE" | cut -d'"' -f2 | tr -d '[]')
-        
-        RAW_V4=$(curl -4 -s -m 3 api.ip.sb/ip 2>/dev/null | tr -d '[:space:]')
-        RAW_V6=$(curl -6 -s -m 3 api.ip.sb/ip 2>/dev/null | tr -d '[:space:]')
-        
-        V4_DEV=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
-        if [[ "$V4_DEV" =~ ^(warp|wgcf|tun|tap|docker|br-|lo) ]] || [[ "$RAW_V4" =~ ^104\.28\. ]] || [[ "$RAW_V4" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\. ]]; then
-            RAW_V4=""
-        fi
-        
-        V6_DEV=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
-        if [[ "$V6_DEV" =~ ^(warp|wgcf|tun|tap|docker|br-|lo) ]] || [[ "$RAW_V6" =~ ^fe80:|^::1 ]]; then
-            RAW_V6=""
-        fi
-        
-        [[ "$TMP_PUB_IP" == *":"* ]] && NEW_COMM_IP="[${TMP_PUB_IP}]" || NEW_COMM_IP="$TMP_PUB_IP"
-        
-        if [[ -n "$RAW_V4" ]] && [[ "$RAW_V4" != "$TMP_PUB_IP" ]]; then
-            NEW_COMM_IP="${NEW_COMM_IP},${RAW_V4}"
-        fi
-        
-        if [[ -n "$RAW_V6" ]] && [[ "$RAW_V6" != "$TMP_PUB_IP" ]]; then
-            NEW_COMM_IP="${NEW_COMM_IP},[${RAW_V6}]"
-        fi
-        
-        echo "COMM_IP=\"$NEW_COMM_IP\"" >> "$CONFIG_FILE"
-        SAFE_COMM_IP="$NEW_COMM_IP"
-        echo -e " \033[32m✅ 成功注入容灾通讯专线: $SAFE_COMM_IP\033[0m"
-    else
-        SAFE_COMM_IP=$(grep "^COMM_IP=" "$CONFIG_FILE" | cut -d'"' -f2)
+    # [v4.2.2 热修复] 为所有老节点 (无论是否已有残缺的 COMM_IP) 强行重铸多宿主容灾弹匣
+    echo -e "\n🔄 [平滑迁移] 正在对老节点执行 v4.2.2 全域容灾弹匣重构..."
+    
+    RAW_V4=$(curl -4 -s -m 3 api.ip.sb/ip 2>/dev/null | tr -d '[:space:]')
+    RAW_V6=$(curl -6 -s -m 3 api.ip.sb/ip 2>/dev/null | tr -d '[:space:]')
+    
+    V4_DEV=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
+    if [[ "$V4_DEV" =~ ^(warp|wgcf|tun|tap|docker|br-|lo) ]] || [[ "$RAW_V4" =~ ^104\.28\. ]] || [[ "$RAW_V4" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\. ]]; then
+        RAW_V4=""
     fi
+    
+    V6_DEV=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
+    if [[ "$V6_DEV" =~ ^(warp|wgcf|tun|tap|docker|br-|lo) ]] || [[ "$RAW_V6" =~ ^fe80:|^::1 ]]; then
+        RAW_V6=""
+    fi
+    
+    # 绝对基座：始终确保养护 IP (SAFE_PUBLIC_IP) 处于弹匣的首发位置
+    NEW_COMM_IP="$SAFE_PUBLIC_IP"
+    RAW_BASE_IP=$(echo "$SAFE_PUBLIC_IP" | tr -d '[]')
+    
+    # 追加 V4 容灾备弹
+    if [[ -n "$RAW_V4" ]] && [[ "$RAW_V4" != "$RAW_BASE_IP" ]]; then
+        NEW_COMM_IP="${NEW_COMM_IP},${RAW_V4}"
+    fi
+    
+    # 追加 V6 容灾备弹
+    if [[ -n "$RAW_V6" ]] && [[ "$RAW_V6" != "$RAW_BASE_IP" ]]; then
+        [[ "$RAW_V6" != *"["* ]] && SAFE_V6="[${RAW_V6}]" || SAFE_V6="$RAW_V6"
+        NEW_COMM_IP="${NEW_COMM_IP},${SAFE_V6}"
+    fi
+    
+    # 强制覆盖 config.conf 中的旧 COMM_IP 记录
+    sed -i '/^COMM_IP=/d' "$CONFIG_FILE"
+    echo "COMM_IP=\"$NEW_COMM_IP\"" >> "$CONFIG_FILE"
+    SAFE_COMM_IP="$NEW_COMM_IP"
+    
+    echo -e " \033[32m✅ 重铸容灾通讯专线完成: $SAFE_COMM_IP\033[0m"
 
     if ! grep -q "^NODE_NAME=" "$CONFIG_FILE"; then
         TMP_HASH=$(echo "${SAFE_PUBLIC_IP:-127.0.0.1}" | md5sum | cut -c 1-4 | tr 'a-z' 'A-Z')
