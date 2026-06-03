@@ -285,13 +285,10 @@ do_final_report() {
         else
             echo -e "\n📡 正在向指挥部发送注册暗号..."
             
-            # 这里的防截断转义是全新安装流程特有的，原版代码就是这么写的
-            SAFE_COMM_IP_ESC=$(echo "$SAFE_COMM_IP" | sed 's/_/\\_/g')
-            
             TEXT_MSG="✨ *IP-Sentinel 部署成功！*
 📍 区域：${REGION_NAME}
 🌐 养护 IP：\`${SAFE_PUBLIC_IP}\`
-📡 容灾 IP：\`${SAFE_COMM_IP_ESC}\`
+📡 容灾 IP：\`${SAFE_COMM_IP}\`
 🔌 端口：\`${AGENT_PORT}\`
 
 🔑 *请点击下方指令复制并回复给机器人：*
